@@ -35,18 +35,6 @@ CONSTANTS PollRequest,
 \* mapping Message to Nat.
 VARIABLE messages
 
-\* A history variable used in the proof. This would not be present in an
-\* implementation.
-\* Keeps track of successful elections, including the initial logs of the
-\* leader and voters' logs. Set of functions containing various things about
-\* successful elections (see BecomeLeader).
-VARIABLE elections
-
-\* A history variable used in the proof. This would not be present in an
-\* implementation.
-\* Keeps track of every log ever in the system (set of logs).
-VARIABLE allLogs
-
 ----
 \* The following variables are all per server (functions with domain Server).
 
@@ -89,13 +77,7 @@ VARIABLE votesResponded
 \* currentTerm.
 VARIABLE votesGranted
 
-\* A history variable used in the proof. This would not be present in an
-\* implementation.
-\* Function from each server that voted for this candidate in its currentTerm
-\* to that voter's log.
-VARIABLE voterLog
-
-candidateVars == <<votesResponded, votesGranted, voterLog>>
+candidateVars == <<votesResponded, votesGranted>>
 
 \* The following variables are used only on leaders:
 \* The next entry to send to each follower.
@@ -105,7 +87,7 @@ VARIABLE nextIndex
 \* leader's. This is used to calculate commitIndex on the leader.
 VARIABLE matchIndex
 
-leaderVars == <<nextIndex, matchIndex, elections>>
+leaderVars == <<nextIndex, matchIndex>>
 
 \* The following variables are used only on clients:
 \* The client request number.
@@ -117,7 +99,7 @@ clientVars == <<clientRequest>>
 ----
 
 \* All variables; used for stuttering (asserting state hasn't changed).
-vars == <<messages, allLogs, serverVars, candidateVars, leaderVars, logVars>>
+vars == <<messages, serverVars, candidateVars, leaderVars, logVars>>
 
 ----
 \* Helpers
@@ -164,10 +146,6 @@ Max(s) == CHOOSE x \in s : \A y \in s : x >= y
 ----
 \* Define initial values for all variables
 
-InitHistoryVars == /\ elections = {}
-                   /\ allLogs   = {}
-                   /\ voterLog  = [i \in Server |-> [j \in {} |-> <<>>]]
-
 InitServerVars == /\ currentTerm = [i \in Server |-> 1]
                   /\ state       = [i \in Server |-> Follower]
                   /\ votedFor    = [i \in Server |-> Nil]
@@ -190,7 +168,6 @@ InitLogVars == /\ log          = [i \in Server |-> << >>]
 InitClientVars == /\ clientRequest = 0
 
 Init == /\ messages = [m \in {} |-> 0]
-        /\ InitHistoryVars
         /\ InitServerVars
         /\ InitFollowerVars
         /\ InitCandidateVars
@@ -209,11 +186,10 @@ Restart(i) ==
     /\ preVotesGranted'   = [preVotesGranted EXCEPT ![i] = {}]
     /\ votesResponded' = [votesResponded EXCEPT ![i] = {}]
     /\ votesGranted'   = [votesGranted EXCEPT ![i] = {}]
-    /\ voterLog'       = [voterLog EXCEPT ![i] = [j \in {} |-> <<>>]]
     /\ nextIndex'      = [nextIndex EXCEPT ![i] = [j \in Server |-> 1]]
     /\ matchIndex'     = [matchIndex EXCEPT ![i] = [j \in Server |-> 0]]
     /\ commitIndex'    = [commitIndex EXCEPT ![i] = 0]
-    /\ UNCHANGED <<messages, currentTerm, votedFor, log, elections, clientVars>>
+    /\ UNCHANGED <<messages, currentTerm, votedFor, log, clientVars>>
 
 TimeoutFollower(i) ==
     /\ state[i] = Follower
@@ -231,7 +207,6 @@ TimeoutCandidate(i) ==
     /\ votedFor' = [votedFor EXCEPT ![i] = Nil]
     /\ votesResponded' = [votesResponded EXCEPT ![i] = {}]
     /\ votesGranted'   = [votesGranted EXCEPT ![i] = {}]
-    /\ voterLog'       = [voterLog EXCEPT ![i] = [j \in {} |-> <<>>]]
     /\ UNCHANGED <<messages, followerVars, leaderVars, logVars, clientVars>>
 
 \* Follower i sends j a pre-vote request.
@@ -299,11 +274,6 @@ BecomeLeader(i) ==
     /\ state'      = [state EXCEPT ![i] = Leader]
     /\ nextIndex'  = [nextIndex EXCEPT ![i] = [j \in Server |-> Len(log[i]) + 1]]
     /\ matchIndex' = [matchIndex EXCEPT ![i] = [j \in Server |-> 0]]
-    /\ elections'  = elections \cup {[eterm     |-> currentTerm[i],
-                                      eleader   |-> i,
-                                      elog      |-> log[i],
-                                      evotes    |-> votesGranted[i],
-                                      evoterLog |-> voterLog[i]]}
     /\ UNCHANGED <<messages, currentTerm, votedFor, followerVars, candidateVars, logVars, clientVars>>
 
 \* Leader i receives a client request to add v to the log.
@@ -402,9 +372,8 @@ HandleRequestVoteResponse(i, j, m) ==
     /\ votesResponded' = [votesResponded EXCEPT ![i] = votesResponded[i] \cup {j}]
     /\ \/ /\ m.mvoteGranted
           /\ votesGranted' = [votesGranted EXCEPT ![i] = votesGranted[i] \cup {j}]
-          /\ voterLog' = [voterLog EXCEPT ![i] = voterLog[i] @@ (j :> m.mlog)]
        \/ /\ ~m.mvoteGranted
-          /\ UNCHANGED <<votesGranted, voterLog>>
+          /\ UNCHANGED <<votesGranted>>
     /\ Discard(m)
     /\ UNCHANGED <<serverVars, votedFor, followerVars, leaderVars, logVars, clientVars>>
 
@@ -484,7 +453,7 @@ HandleAppendEntriesResponse(i, j, m) ==
                                Max({nextIndex[i][j] - 1, 1})]
           /\ UNCHANGED <<matchIndex>>
     /\ Discard(m)
-    /\ UNCHANGED <<serverVars, followerVars, candidateVars, logVars, elections, clientVars>>
+    /\ UNCHANGED <<serverVars, followerVars, candidateVars, logVars, clientVars>>
 
 \* Any RPC with a newer term causes the recipient to advance its term first.
 UpdateTerm(i, j, m) ==
@@ -543,21 +512,19 @@ SingleMessage(msgs) == {m \in DOMAIN messages : msgs[m] = 1}
 
 ----
 \* Defines how the variables may transition.
-Next == /\ \/ \E i \in Server : Restart(i)
-           \/ \E i \in Server : TimeoutFollower(i)
-           \/ \E i \in Server : TimeoutCandidate(i)
-           \/ \E i, j \in Server : RequestPreVote(i, j)
-           \/ \E i, j \in Server : RequestVote(i, j)
-           \/ \E i \in Server : BecomeCandidate(i)
-           \/ \E i \in Server : BecomeLeader(i)
-           \/ \E i \in Server : ClientRequest(i)
-           \/ \E i \in Server : AdvanceCommitIndex(i)
-           \/ \E i, j \in Server : AppendEntries(i, j)
-           \/ \E m \in ValidMessage(messages) : Receive(m)
-           \/ \E m \in SingleMessage(messages) : DuplicateMessage(m)
-           \/ \E m \in ValidMessage(messages) : DropMessage(m)
-           \* History variable that tracks every log ever:
-        /\ allLogs' = allLogs \cup {log[i] : i \in Server}
+Next == \/ \E i \in Server : Restart(i)
+        \/ \E i \in Server : TimeoutFollower(i)
+        \/ \E i \in Server : TimeoutCandidate(i)
+        \/ \E i, j \in Server : RequestPreVote(i, j)
+        \/ \E i, j \in Server : RequestVote(i, j)
+        \/ \E i \in Server : BecomeCandidate(i)
+        \/ \E i \in Server : BecomeLeader(i)
+        \/ \E i \in Server : ClientRequest(i)
+        \/ \E i \in Server : AdvanceCommitIndex(i)
+        \/ \E i, j \in Server : AppendEntries(i, j)
+        \/ \E m \in ValidMessage(messages) : Receive(m)
+        \/ \E m \in SingleMessage(messages) : DuplicateMessage(m)
+        \/ \E m \in ValidMessage(messages) : DropMessage(m)
 
 Inv ==
     /\ \E s1, s2 \in Server :
