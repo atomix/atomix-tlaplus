@@ -5,52 +5,74 @@ EXTENDS Messages, Server
 \* The set of client IDs
 CONSTANTS Client
 
-VARIABLE sessions
+VARIABLE client
 
-VARIABLE clientRequest
+VARIABLE clientCommand
 
-clientVars == <<sessions, clientRequest>>
+clientVars == <<client, clientCommand>>
 
 ----
 
 InitClientVars ==
-    /\ sessions = [i \in Client |-> [id |-> Nil]]
-    /\ clientRequest = 1
+    /\ client = [i \in Client |-> [id |-> Nil]]
+    /\ clientCommand = 1
 
 ----
 
-OpenSession(i, j) ==
-    /\ state[j] = Leader
-    /\ LET entry == [term   |-> currentTerm[j],
-                     type   |-> OpenSessionEntry,
-                     client |-> i]
-       IN
-           /\ log' = [log EXCEPT ![j] = Append(log[j], entry)]
-           /\ clientRequest' = clientRequest + 1
-    /\ UNCHANGED <<messages, serverVars, followerVars, candidateVars, leaderVars, commitIndex>>
+OpenSession(c, s) ==
+    /\ client[c].id = Nil
+    /\ Send([mtype   |-> OpenSessionRequest,
+             msource |-> c,
+             mdest   |-> s])
+    /\ UNCHANGED <<clientVars>>
 
-CloseSession(i, j) ==
-    /\ state[j] = Leader
-    /\ LET entry == [term   |-> currentTerm[j],
-                     type   |-> OpenSessionEntry,
-                     client |-> i]
-       IN
-           /\ log' = [log EXCEPT ![j] = Append(log[j], entry)]
-           /\ clientRequest' = clientRequest + 1
-    /\ UNCHANGED <<messages, serverVars, followerVars, candidateVars, leaderVars, commitIndex>>
+CloseSession(c, s) ==
+    /\ client[c].id # Nil
+    /\ Send([mtype    |-> CloseSessionRequest,
+             msession |-> client[c].id,
+             msource  |-> c,
+             mdest    |-> s])
+    /\ UNCHANGED <<clientVars>>
 
-\* Leader i receives a client request to add v to the log.
-ClientRequest(i, j) ==
-    /\ state[j] = Leader
-    /\ LET entry == [term  |-> currentTerm[j],
-                     type  |-> CommandEntry,
-                     value |-> clientRequest]
+ClientRequest(c, s) ==
+    /\ client[c].id # Nil
+    /\ Send([mtype |-> CommandRequest,
+             msession |-> client[c].id,
+             mcommand |-> clientCommand,
+             msource |-> c,
+             mdest |-> s])
+    /\ clientCommand' = clientCommand + 1
+    /\ UNCHANGED <<client>>
+
+----
+
+HandleOpenSessionResponse(c, m) ==
+    /\ client' = [client EXCEPT ![c] = [id |-> m.msession]]
+    /\ Discard(m)
+    /\ UNCHANGED <<clientCommand>>
+
+HandleCloseSessionResponse(c, m) ==
+    /\ client' = [client EXCEPT ![c] = [id |-> Nil]]
+    /\ Discard(m)
+    /\ UNCHANGED <<clientCommand>>
+
+HandleCommandResponse(c, m) ==
+    /\ Discard(m)
+    /\ UNCHANGED <<clientVars>>
+
+----
+
+ClientReceive(m) ==
+    /\ LET c == m.mdest
        IN
-           /\ log' = [log EXCEPT ![j] = Append(log[j], entry)]
-           /\ clientRequest' = clientRequest + 1
-    /\ UNCHANGED <<messages, serverVars, followerVars, candidateVars, leaderVars, commitIndex>>
+           \/ /\ m.mtype = OpenSessionResponse
+              /\ HandleOpenSessionResponse(c, m)
+           \/ /\ m.mtype = CloseSessionResponse
+              /\ HandleCloseSessionResponse(c, m)
+           \/ /\ m.mtype = CommandResponse
+              /\ HandleCommandResponse(c, m)
 
 =============================================================================
 \* Modification History
-\* Last modified Tue Jan 30 16:35:28 PST 2018 by jordanhalterman
+\* Last modified Tue Jan 30 22:18:13 PST 2018 by jordanhalterman
 \* Created Tue Jan 30 15:04:21 PST 2018 by jordanhalterman

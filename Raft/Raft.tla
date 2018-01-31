@@ -10,19 +10,19 @@ EXTENDS Naturals, FiniteSets, Sequences, TLC, Client, Server, Messages
 ----
 
 \* All variables; used for stuttering (asserting state hasn't changed).
-vars == <<messages, clientVars, serverVars, candidateVars, leaderVars, logVars>>
+vars == <<messages, clientVars, serverVars, stateVars, followerVars, candidateVars, leaderVars, logVars>>
 
 ----
 
 \* The network duplicates a message
 DuplicateMessage(m) ==
     /\ Send(m)
-    /\ UNCHANGED <<serverVars, followerVars, candidateVars, leaderVars, logVars, clientVars>>
+    /\ UNCHANGED <<serverVars, stateVars, followerVars, candidateVars, leaderVars, logVars, clientVars>>
 
 \* The network drops a message
 DropMessage(m) ==
     /\ Discard(m)
-    /\ UNCHANGED <<serverVars, followerVars, candidateVars, leaderVars, logVars, clientVars>>
+    /\ UNCHANGED <<serverVars, stateVars, followerVars, candidateVars, leaderVars, logVars, clientVars>>
 
 ----
 
@@ -47,12 +47,14 @@ Next == \/ \E i \in Server : Restart(i)
         \/ \E i \in Server : BecomeLeader(i)
            /\ UNCHANGED <<clientVars>>
         \/ \E i \in Client, j \in Server : OpenSession(i, j)
-           /\ UNCHANGED <<messages, serverVars, candidateVars, leaderVars, logVars>>
+           /\ UNCHANGED <<serverVars, stateVars, followerVars, candidateVars, leaderVars, logVars>>
         \/ \E i \in Client, j \in Server : CloseSession(i, j)
-           /\ UNCHANGED <<messages, serverVars, candidateVars, leaderVars, logVars>>
+           /\ UNCHANGED <<serverVars, stateVars, followerVars, candidateVars, leaderVars, logVars>>
         \/ \E i \in Client, j \in Server : ClientRequest(i, j)
-           /\ UNCHANGED <<messages, serverVars, candidateVars, leaderVars, logVars>>
+           /\ UNCHANGED <<serverVars, stateVars, followerVars, candidateVars, leaderVars, logVars>>
         \/ \E i \in Server : AdvanceCommitIndex(i)
+           /\ UNCHANGED <<clientVars>>
+        \/ \E i \in Server : ApplyEntry(i)
            /\ UNCHANGED <<clientVars>>
         \/ \E i, j \in Server : AppendEntries(i, j)
            /\ UNCHANGED <<clientVars>>
