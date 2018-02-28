@@ -42,16 +42,13 @@ VARIABLE votedFor
 
 serverVars == <<currentTerm, state, votedFor>>
 
-\* A sequence of committed entries to be applied
-VARIABLE commit
-
 \* The last applied index
 VARIABLE lastApplied
 
 \* All registered sessions
 VARIABLE session
 
-stateVars == <<commit, lastApplied, session>>
+stateVars == <<lastApplied, session>>
 
 \* A Sequence of log entries. The index into this sequence is the index of the
 \* log entry. Unfortunately, the Sequence module defines Head(s) as the entry
@@ -106,7 +103,7 @@ Max(s) == CHOOSE x \in s : \A y \in s : x >= y
 
 InitServerVars ==
     /\ currentTerm = [i \in Server |-> 1]
-    /\ state       = [i \in Server |-> Follower]
+    /\ state       = [s1 |-> Leader, s2 |-> Follower, s3 |-> Follower]
     /\ votedFor    = [i \in Server |-> Nil]
     /\ preVotesGranted   = [i \in Server |-> {}]
     /\ votesGranted   = [i \in Server |-> {}]
@@ -114,7 +111,6 @@ InitServerVars ==
     /\ matchIndex = [i \in Server |-> [j \in Server |-> 0]]
     /\ log          = [i \in Server |-> << >>]
     /\ commitIndex  = [i \in Server |-> 0]
-    /\ commit = [i \in Server |-> <<>>]
     /\ lastApplied = [i \in Server |-> 0]
     /\ session = [i \in Server |-> [j \in {} |-> [id |-> Nil]]]
 
@@ -140,13 +136,10 @@ TimeoutFollower(i) ==
 \* Server i times out and starts a new election.
 TimeoutCandidate(i) ==
     /\ state[i] = Candidate
-    /\ state' = [state EXCEPT ![i] = Candidate]
     /\ currentTerm' = [currentTerm EXCEPT ![i] = currentTerm[i] + 1]
-    \* Most implementations would probably just set the local vote
-    \* atomically, but messaging localhost for it is weaker.
     /\ votedFor' = [votedFor EXCEPT ![i] = Nil]
     /\ votesGranted'   = [votesGranted EXCEPT ![i] = {}]
-    /\ UNCHANGED <<messages, stateVars, followerVars, leaderVars, logVars>>
+    /\ UNCHANGED <<messages, state, stateVars, followerVars, leaderVars, logVars>>
 
 \* Follower i sends j a pre-vote request.
 RequestPreVote(i, j) ==
@@ -176,6 +169,7 @@ RequestVote(i, j) ==
 AppendEntries(i, j) ==
     /\ i /= j
     /\ state[i] = Leader
+    /\ Len(log[i]) >= nextIndex[i][j] \* Limit empty AppendEntries RPCs
     /\ LET prevLogIndex == nextIndex[i][j] - 1
            prevLogTerm == IF prevLogIndex > 0 THEN
                               log[i][prevLogIndex].term
@@ -200,7 +194,6 @@ AppendEntries(i, j) ==
 \* Follower i transitions to candidate.
 BecomeCandidate(i) ==
     /\ state[i] = Follower
-    /\ preVotesGranted[i] \in Quorum
     /\ state' = [state EXCEPT ![i] = Candidate]
     /\ currentTerm' = [currentTerm EXCEPT ![i] = currentTerm[i] + 1]
     /\ votedFor' = [votedFor EXCEPT ![i] = Nil]
@@ -236,12 +229,11 @@ AdvanceCommitIndex(i) ==
                   commitIndex[i]
        IN
            /\ commitIndex' = [commitIndex EXCEPT ![i] = newCommitIndex]
-           /\ commit' = [commit EXCEPT ![i] = commit[i] \o SubSeq(log[i], commitIndex + 1, newCommitIndex)]
     /\ UNCHANGED <<messages, serverVars, stateVars, followerVars, candidateVars, leaderVars, log>>
 
 ApplyEntry(i) ==
-    /\ Len(commit[i]) > 0
-    /\ LET entry == commit[1]
+    /\ commitIndex[i] > lastApplied[i]
+    /\ LET entry == log[i][lastApplied[i]+1]
        IN
            /\ \/ /\ entry.type = OpenSessionEntry
                  /\ session' = [session EXCEPT ![i] = session[i] @@ (entry.index :> [id |-> entry.index])]
@@ -264,9 +256,8 @@ ApplyEntry(i) ==
                                 mdest |-> session[entry.session].client])
                     \/ /\ entry.session \notin DOMAIN session
                        /\ UNCHANGED <<messages, session>>
-           /\ commit' = [commit EXCEPT ![i] = SubSeq(commit[i], 1, Len(commit[i]))]
-           /\ lastApplied' = entry.index
-           /\ UNCHANGED <<currentTerm, state, votedFor, followerVars, candidateVars, leaderVars, log>>
+           /\ lastApplied' = [lastApplied EXCEPT ![i] = lastApplied[i] + 1]
+           /\ UNCHANGED <<serverVars, followerVars, candidateVars, leaderVars, logVars>>
 
 ----
 \* Message handlers
@@ -363,14 +354,14 @@ HandleAppendEntriesRequest(i, j, m) ==
              /\ logOk
              /\ LET index == m.mprevLogIndex + 1
                 IN \/ \* already done with request
-                       /\ \/ m.mentries = << >>
-                          \/ /\ Len(log[i]) >= index
+                       /\ \/ Len(m.mentries) = 0
+                          \/ /\ Len(m.mentries) > 0 \* Raft spec fix
+                             /\ Len(log[i]) >= index
                              /\ log[i][index].term = m.mentries[1].term
                           \* This could make our commitIndex decrease (for
                           \* example if we process an old, duplicated request),
                           \* but that doesn't really affect anything.
-                       /\ commitIndex' = [commitIndex EXCEPT ![i] =
-                                              m.mcommitIndex]
+                       /\ commitIndex' = [commitIndex EXCEPT ![i] = m.mcommitIndex]
                        /\ Reply([mtype           |-> AppendResponse,
                                  mterm           |-> currentTerm[i],
                                  msuccess        |-> TRUE,
@@ -389,7 +380,7 @@ HandleAppendEntriesRequest(i, j, m) ==
                    \/ \* no conflict: append entry
                        /\ m.mentries /= << >>
                        /\ Len(log[i]) = m.mprevLogIndex
-                       /\ log' = [log EXCEPT ![i] = Append(log[i], m.mentries[1])]
+                       /\ log' = [log EXCEPT ![i] = log[i] \o m.mentries] \* Raft spec fix
                        /\ UNCHANGED <<serverVars, commitIndex, messages>>
        /\ UNCHANGED <<stateVars, followerVars, candidateVars, leaderVars>>
 
@@ -409,31 +400,31 @@ HandleAppendEntriesResponse(i, j, m) ==
 
 HandleOpenSessionRequest(s, c, m) ==
     /\ state[s] = Leader
-    /\ log' = [log EXCEPT ![s] = Append(log[s], [index  |-> Len(log[s]),
+    /\ log' = [log EXCEPT ![s] = Append(log[s], [index  |-> Len(log[s]) + 1,
                                                  term   |-> currentTerm[s],
                                                  type   |-> OpenSessionEntry,
                                                  client |-> c])]
     /\ Discard(m)
-    /\ UNCHANGED <<serverVars, stateVars, followerVars, candidateVars, leaderVars>>
+    /\ UNCHANGED <<serverVars, stateVars, followerVars, candidateVars, leaderVars, commitIndex>>
 
 HandleCloseSessionRequest(s, c, m) ==
     /\ state[s] = Leader
-    /\ log' = [log EXCEPT ![s] = Append(log[s], [index   |-> Len(log[s]),
+    /\ log' = [log EXCEPT ![s] = Append(log[s], [index   |-> Len(log[s]) + 1,
                                                  term    |-> currentTerm[s],
                                                  type    |-> CloseSessionEntry,
                                                  session |-> m.msession])]
     /\ Discard(m)
-    /\ UNCHANGED <<serverVars, stateVars, followerVars, candidateVars, leaderVars>>
+    /\ UNCHANGED <<serverVars, stateVars, followerVars, candidateVars, leaderVars, commitIndex>>
 
 HandleCommandRequest(s, c, m) ==
     /\ state[s] = Leader
-    /\ log' = [log EXCEPT ![s] = Append(log[s], [index   |-> Len(log[s]),
+    /\ log' = [log EXCEPT ![s] = Append(log[s], [index   |-> Len(log[s]) + 1,
                                                  term    |-> currentTerm[s],
                                                  type    |-> CommandEntry,
                                                  session |-> m.msession,
                                                  command |-> m.mcommand])]
     /\ Discard(m)
-    /\ UNCHANGED <<serverVars, stateVars, followerVars, candidateVars, leaderVars>>
+    /\ UNCHANGED <<serverVars, stateVars, followerVars, candidateVars, leaderVars, commitIndex>>
 
 \* Any RPC with a newer term causes the recipient to advance its term first.
 UpdateTerm(i, j, m) ==
@@ -481,5 +472,5 @@ Receive(m) ==
 
 =============================================================================
 \* Modification History
-\* Last modified Wed Jan 31 00:52:47 PST 2018 by jordanhalterman
+\* Last modified Sat Feb 03 13:30:59 PST 2018 by jordanhalterman
 \* Created Tue Jan 30 15:04:21 PST 2018 by jordanhalterman

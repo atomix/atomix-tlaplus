@@ -43,7 +43,17 @@ Discard(m) == messages' = WithoutMessage(m, messages)
 Reply(response, request) ==
     messages' = WithoutMessage(request, WithMessage(response, messages))
 
+\* The network duplicates a message
+DuplicateMessage(m) ==
+    /\ messages[m] = 1
+    /\ Send(m)
+
+\* The network drops a message
+DropMessage(m) ==
+    /\ messages[m] > 0
+    /\ Discard(m)
+
 =============================================================================
 \* Modification History
-\* Last modified Tue Jan 30 15:22:05 PST 2018 by jordanhalterman
+\* Last modified Wed Jan 31 20:55:09 PST 2018 by jordanhalterman
 \* Created Tue Jan 30 15:04:21 PST 2018 by jordanhalterman

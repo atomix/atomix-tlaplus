@@ -9,20 +9,10 @@ EXTENDS Naturals, FiniteSets, Sequences, TLC, Client, Server, Messages
 
 ----
 
+VARIABLE allStates
+
 \* All variables; used for stuttering (asserting state hasn't changed).
-vars == <<messages, clientVars, serverVars, stateVars, followerVars, candidateVars, leaderVars, logVars>>
-
-----
-
-\* The network duplicates a message
-DuplicateMessage(m) ==
-    /\ Send(m)
-    /\ UNCHANGED <<serverVars, stateVars, followerVars, candidateVars, leaderVars, logVars, clientVars>>
-
-\* The network drops a message
-DropMessage(m) ==
-    /\ Discard(m)
-    /\ UNCHANGED <<serverVars, stateVars, followerVars, candidateVars, leaderVars, logVars, clientVars>>
+vars == <<allStates, messages, clientVars, serverVars, stateVars, followerVars, candidateVars, leaderVars, logVars>>
 
 ----
 
@@ -30,9 +20,11 @@ Init ==
     /\ InitClientVars
     /\ InitServerVars
     /\ InitMessageVars
+    /\ allStates = 0
 
 \* Defines how the variables may transition.
-Next == \/ \E i \in Server : Restart(i)
+Next == 
+     /\ \/ \E i \in Server : Restart(i)
            /\ UNCHANGED <<clientVars>>
         \/ \E i \in Server : TimeoutFollower(i)
            /\ UNCHANGED <<clientVars>>
@@ -61,9 +53,10 @@ Next == \/ \E i \in Server : Restart(i)
         \/ \E m \in DOMAIN messages : Receive(m)
            /\ UNCHANGED <<clientVars>>
         \/ \E m \in DOMAIN messages : DuplicateMessage(m)
-           /\ UNCHANGED <<clientVars>>
+           /\ UNCHANGED <<serverVars, stateVars, followerVars, candidateVars, leaderVars, logVars, clientVars>>
         \/ \E m \in DOMAIN messages : DropMessage(m)
-           /\ UNCHANGED <<clientVars>>
+           /\ UNCHANGED <<serverVars, stateVars, followerVars, candidateVars, leaderVars, logVars, clientVars>>
+     /\ allStates' = allStates + 1
 
 Inv ==
     /\ \E s1, s2 \in Server :
