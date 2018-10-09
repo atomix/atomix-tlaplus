@@ -104,10 +104,6 @@ Send(m) == messages' = WithMessage(m, messages)
 \* processing a message.
 Discard(m) == messages' = WithoutMessage(m, messages)
 
-\* Combination of Send and Discard
-Reply(response, request) ==
-    messages' = WithoutMessage(request, WithMessage(response, messages))
-
 \* The network duplicates a message
 DuplicateMessage(m) ==
     /\ messages[m] = 1
@@ -144,10 +140,7 @@ RecordHistory(source, dest, tm, state) ==
 \* When the state of the 'dest' is updated, an update message is enqueued for gossip
 \* and the state change is recorded in the 'source' node's history for model checking.
 UpdateState(source, dest, tm, state) ==
-    /\ IF dest \in DOMAIN members[source] THEN
-           members' = [members EXCEPT ![source][dest] = [term |-> tm, state |-> state]]
-       ELSE
-           members' = [members EXCEPT ![source] = members[source] @@ (dest :> [term |-> tm, state |-> state])]
+    /\ members' = [members EXCEPT ![source][dest] = [term |-> tm, state |-> state]]
     /\ RecordUpdate(source, [id |-> dest, term |-> tm, state |-> state])
     /\ RecordHistory(source, dest, tm, state)
 
@@ -228,7 +221,7 @@ If the probe request matches the local term for the probe destination and the lo
 state for the destination is Alive, update the state to Suspect.
 *)
 HandleFail(source, dest, message) ==
-    /\ \/ /\ dest \in DOMAIN members[source]
+    /\ \/ /\ message.term > 0
           /\ message.term = members[source][dest].term
           /\ members[source][dest].state = Alive
           /\ UpdateState(source, dest, message.term, Suspect)
@@ -276,14 +269,13 @@ enqueue the change for gossip.
 Record state changes in the history variable for model checking.
 *)
 HandleGossipUpdate(source, dest, message) ==
-    /\ \/ /\ message.id \notin DOMAIN members[dest]
+    /\ \/ /\ message.term > members[dest][message.id].term
           /\ UpdateState(dest, message.id, message.term, message.state)
-       \/ /\ message.id \in DOMAIN members[dest]
-          /\ \/ /\ message.term > members[dest][message.id].term
-             \/ /\ message.term = members[dest][message.id].term
-                /\ message.state < members[dest][message.id].state
+       \/ /\ message.term = members[dest][message.id].term
+          /\ message.state < members[dest][message.id].state
           /\ UpdateState(dest, message.id, message.term, message.state)
-       \/ UNCHANGED <<members, updates, history>>
+       \/ /\ message.term < members[dest][message.id].term
+          /\ UNCHANGED <<members, updates, history>>
     /\ UNCHANGED <<term, messages>>
 
 (*
@@ -364,5 +356,5 @@ Spec == Init /\ [][Next]_vars
 
 =============================================================================
 \* Modification History
-\* Last modified Mon Oct 08 17:17:17 PDT 2018 by jordanhalterman
+\* Last modified Mon Oct 08 18:06:26 PDT 2018 by jordanhalterman
 \* Created Mon Oct 08 00:36:03 PDT 2018 by jordanhalterman
